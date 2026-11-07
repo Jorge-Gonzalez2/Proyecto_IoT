@@ -1,6 +1,13 @@
 package cl.inacap.appgas
 
+import android.Manifest
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
+import androidx.activity.result.contract.ActivityResultContracts
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -8,6 +15,10 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -18,6 +29,11 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.Icon
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Surface
@@ -38,19 +54,60 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
 class MainActivity : ComponentActivity() {
+    // Solicita el permiso solo cuando se intenta mostrar una alerta real.
+    private val permissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted) showDangerNotification()
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-
+        createNotificationChannel()
         setContent {
-            GasScreen()
+            GasScreen(onDanger = { requestDangerNotification() })
         }
+    }
+
+    private fun requestDangerNotification() {
+        if (Build.VERSION.SDK_INT >= 33 &&
+            checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) {
+            permissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        } else {
+            showDangerNotification()
+        }
+    }
+
+    private fun createNotificationChannel() {
+        if (Build.VERSION.SDK_INT >= 26) {
+            val channel = NotificationChannel(
+                "gas_alerts", "Alertas de gas", NotificationManager.IMPORTANCE_HIGH
+            ).apply { description = "Avisos del simulador de gas" }
+            getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
+        }
+    }
+
+    private fun showDangerNotification() {
+        val builder = if (Build.VERSION.SDK_INT >= 26) {
+            Notification.Builder(this, "gas_alerts")
+        } else {
+            Notification.Builder(this)
+        }
+        val notification = builder
+            .setSmallIcon(android.R.drawable.ic_dialog_alert)
+            .setContentTitle("¡Peligro de gas! (simulación)")
+            .setContentText("El nivel simulado superó el 80 %.")
+            .setAutoCancel(true)
+            .build()
+        getSystemService(NotificationManager::class.java).notify(1, notification)
     }
 }
 
 @Composable
-fun GasScreen() {
+fun GasScreen(onDanger: () -> Unit = {}) {
     val context = LocalContext.current
-    var gasLevel by remember { mutableStateOf(0f) }
+    var gasLevel by remember { mutableStateOf(50f) }
     val percentage = gasLevel.toInt()
     val levelText = getLevelText(percentage)
     val badgeBg = getBadgeBackground(percentage)
@@ -62,6 +119,7 @@ fun GasScreen() {
         modifier = Modifier
             .fillMaxSize()
             .background(Color(0xFFF3F5F2))
+            .verticalScroll(rememberScrollState())
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
@@ -79,6 +137,10 @@ fun GasScreen() {
 
         LevelScaleSection(percentage = percentage)
 
+        if (percentage > 80) {
+            DangerAlertSection()
+        }
+
         DeviceSection(
             onDetailsClick = {
                 Toast.makeText(context, "No disponible", Toast.LENGTH_SHORT).show()
@@ -87,7 +149,11 @@ fun GasScreen() {
 
         SensorSimulatorSection(
             gasLevel = gasLevel,
-            onGasLevelChange = { gasLevel = it },
+            onGasLevelChange = { newLevel ->
+                // Notificar solo al cruzar de nivel normal a peligro.
+                if (gasLevel <= 80f && newLevel > 80f) onDanger()
+                gasLevel = newLevel
+            },
             progressColor = progressColor
         )
     }
@@ -95,23 +161,43 @@ fun GasScreen() {
 
 @Composable
 fun HeaderSection() {
-    Column(
+    Row(
         modifier = Modifier.fillMaxWidth(),
-        verticalArrangement = Arrangement.spacedBy(4.dp)
+        verticalAlignment = Alignment.CenterVertically
     ) {
-        Text(
-            text = "No más fugas",
-            fontSize = 24.sp,
-            fontWeight = FontWeight.Bold,
-            color = Color(0xFF1C2821)
-        )
-        Text(
-            text = "Hogar - Sensor Cocina",
-            fontSize = 14.sp,
-            color = Color(0xFF55645D)
-        )
+        Icon(Icons.Default.Home, contentDescription = "Hogar", tint = Color(0xFF2E7D32),
+            modifier = Modifier.size(32.dp))
+        Spacer(modifier = Modifier.size(12.dp))
+        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text("No más fugas", fontSize = 24.sp, fontWeight = FontWeight.Bold,
+                color = Color(0xFF1C2821))
+            Text("Hogar - Sensor Cocina · Simulación", fontSize = 13.sp,
+                color = Color(0xFF55645D))
+        }
     }
 }
+
+@Composable
+fun DangerAlertSection() {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = Color(0xFFFFEBEE))
+    ) {
+        Row(modifier = Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+            Icon(Icons.Default.Warning, contentDescription = "Advertencia",
+                tint = Color(0xFFC62828), modifier = Modifier.size(30.dp))
+            Spacer(modifier = Modifier.size(12.dp))
+            Column {
+                Text("¡PELIGRO! Nivel de gas elevado", fontWeight = FontWeight.Bold,
+                    color = Color(0xFFC62828))
+                Text("Alerta de prueba: nivel simulado superior al 80 %.",
+                    fontSize = 13.sp, color = Color(0xFF7F2424))
+            }
+        }
+    }
+}
+
 @Composable
 fun GasLevelCard(
     gasLevel: Float,
@@ -135,6 +221,13 @@ fun GasLevelCard(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
+            Icon(
+                imageVector = if (percentage > 80) Icons.Default.Warning else Icons.Default.Info,
+                contentDescription = "Estado del gas",
+                tint = progressColor,
+                modifier = Modifier.size(38.dp)
+            )
+
             LinearProgressIndicator(
                 progress = { gasLevel / 100f },
                 modifier = Modifier
@@ -230,7 +323,7 @@ fun DeviceSection(onDetailsClick: () -> Unit) {
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             Text(
-                text = "Dispositivo Conectado",
+                text = "📶 Dispositivo conectado",
                 fontSize = 16.sp,
                 fontWeight = FontWeight.Bold,
                 color = Color(0xFF1C2821)
@@ -349,7 +442,7 @@ fun getDescriptionText(percentage: Int): String {
     }
 }
 
-@Preview(showBackground = true, showSystemUi = true)
+@Preview(showBackground = true)
 @Composable
 fun GasScreenPreview() {
     GasScreen()
